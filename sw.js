@@ -1,4 +1,4 @@
-const CACHE_NAME = 'velovertical-shell-v2';
+const CACHE_NAME = 'velovertical-shell-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const APP_SHELL = [
   './js/geocoder.js',
   './js/routing.js',
   './js/overpass.js',
+  './js/spotStore.js',
   './js/optimizer.js',
   './js/weather.js',
   './js/logistics.js',

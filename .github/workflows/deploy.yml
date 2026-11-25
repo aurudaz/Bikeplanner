@@ -3,7 +3,15 @@ name: Deploy VeloVertical to GitHub Pages
 on:
   push:
     branches: ["main"]
+  schedule:
+    - cron: "0 3 * * 0"
   workflow_dispatch:
+    inputs:
+      refresh_spots:
+        description: "Force rebuild OpenStreetMap spots dataset"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,12 +31,39 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run unit and contract tests
+        run: npm test
+
+      - name: Restore cached spatial spot tiles
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: osm-spots-${{ hashFiles('scripts/build-spots-data.mjs') }}-${{ github.run_id }}
+          restore-keys: |
+            osm-spots-${{ hashFiles('scripts/build-spots-data.mjs') }}-
+
+      - name: Build OpenStreetMap spatial tiles if empty or scheduled
+        run: |
+          TOTAL=$(node -e "const fs = require('fs'); const d = JSON.parse(fs.readFileSync('data/index.json', 'utf8')); console.log(d.totalSpots || 0);")
+          echo "Cached spots count: $TOTAL"
+          if [ "$TOTAL" -eq 0 ] || [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.refresh_spots }}" = "true" ]; then
+            node scripts/build-spots-data.mjs
+          fi
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: "."
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

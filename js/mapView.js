@@ -19,7 +19,7 @@ function gradeColor(gradePct) {
 }
 
 export class MapView {
-  constructor(elementId, { onMapClick, onSpotAction, onWaymarkedChange }) {
+  constructor(elementId, { onMapClick, onSpotAction, onWaymarkedChange, onViewportChange }) {
     this.onSpotAction = onSpotAction;
     this.map = L.map(elementId, { zoomControl: false }).setView([46.55, 8.1], 8);
     L.control.zoom({ position: 'topright' }).addTo(this.map);
@@ -86,6 +86,14 @@ export class MapView {
       this.map.on('click', e => onMapClick(e.latlng));
     }
 
+    if (onViewportChange) {
+      let moveTimer = null;
+      this.map.on('moveend', () => {
+        clearTimeout(moveTimer);
+        moveTimer = setTimeout(() => onViewportChange(), 250);
+      });
+    }
+
     // Bind popup button actions safely without inline onclick attributes
     this.map.on('popupopen', e => {
       const root = e.popup.getElement();
@@ -116,6 +124,10 @@ export class MapView {
   getBoundsArray() {
     const b = this.map.getBounds();
     return [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+  }
+
+  getZoom() {
+    return this.map.getZoom();
   }
 
   setView(lat, lon, zoom = 12) {

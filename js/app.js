@@ -15,7 +15,8 @@ import {
 import { getExternalLinks } from './externalLinks.js';
 import { geocodeSearch, reverseGeocode } from './geocoder.js';
 import { computeBikeRoute } from './routing.js';
-import { fetchAdventureSpots, fetchSupportPOIs } from './overpass.js';
+import { fetchSupportPOIs } from './overpass.js';
+import { SpotStore } from './spotStore.js';
 import {
   orderWaypoints2Opt,
   pickSpotToTrim,
@@ -73,8 +74,11 @@ const state = {
   supportEnabled: new Set(),
   waymarkedEnabled: true,
   weather: null,
-  gearChecked: {}
+  gearChecked: {},
+  lastSpotSource: null
 };
+
+const spotStore = new SpotStore();
 
 function loadPrefs() {
   try {
@@ -150,7 +154,8 @@ const mapView = new MapView('map', {
     if (action === 'toggle') toggleSpotOnRoute(spotId);
     else if (action === 'pin') togglePinSpot(spotId);
   },
-  onWaymarkedChange: active => updateWaymarkedUI(active)
+  onWaymarkedChange: active => updateWaymarkedUI(active),
+  onViewportChange: () => refreshViewportBrowseSpots()
 });
 
 const elevChart = new ElevationChart({
@@ -375,10 +380,55 @@ function getOrderedSelectedSpots() {
   });
 }
 
-async function scanExploreArea() {
+function updateDataSourceBadge(source = null) {
+  const el = $('dataSourceBadge');
+  const idx = spotStore.index;
+  if (!idx || !idx.totalSpots) {
+    el.textContent = source === 'live'
+      ? 'Spot data: Live Overpass API (static tiles empty until GitHub Action builds)'
+      : 'Spot data: Live Overpass fallback (run GitHub Action to build static tiles)';
+    return;
+  }
+  const dateTag = idx.generatedAt ? ` · updated ${idx.generatedAt.slice(0, 10)}` : '';
+  const modeTag = source === 'live' ? ' · showing Live OSM' : '';
+  el.textContent = `⚡ Prebuilt OSM dataset: ${idx.totalSpots.toLocaleString()} spots${dateTag}${modeTag}`;
+}
+
+async function refreshViewportBrowseSpots() {
+  if (state.finalRoute && state.mode !== 'explore') return;
+  if (mapView.getZoom() < 7) return;
+  const idx = await spotStore.loadIndex();
+  if (!idx.totalSpots) return;
+
+  const cfg = getPlannerInputs();
+  const browseSpots = await spotStore.getViewportBrowseSpots(mapView.getBoundsArray(), cfg.enabledCats, {
+    minDiff: cfg.minDiff,
+    maxDiff: cfg.maxDiff,
+    includeUnrated: cfg.includeUnrated,
+    pgLaunchesOnly: cfg.pgLaunchesOnly,
+    maxSpots: 240
+  });
+
+  // Preserve any already-selected spots even if outside current zoom window
+  const byId = new Map(browseSpots.map(s => [s.id, s]));
+  for (const prev of state.allSpots) {
+    if (state.selectedIds.has(prev.id) && !byId.has(prev.id)) {
+      byId.set(prev.id, prev);
+    }
+  }
+  state.allSpots = [...byId.values()];
+  mapView.renderSpots(state.allSpots, {
+    selectedIds: state.selectedIds,
+    pinnedIds: state.pinnedIds,
+    weather: state.weather,
+    unit: state.unit
+  });
+}
+
+async function scanExploreArea(forceLive = false) {
   const bounds = mapView.getBoundsArray();
   const span = bboxSpanKm(bounds);
-  if (span.widthKm > 180 || span.heightKm > 180) {
+  if (forceLive && (span.widthKm > 180 || span.heightKm > 180)) {
     setStatus(`Visible area is ${Math.round(span.widthKm)}×${Math.round(span.heightKm)} km — zoom in closer (<180 km) to scan Overpass safely.`, 'warn');
     return;
   }
@@ -387,13 +437,15 @@ async function scanExploreArea() {
   btn.disabled = true;
   try {
     const cfg = getPlannerInputs();
-    setStatus('Scanning visible map area across selected sports...');
-    const discovered = await fetchAdventureSpots(bounds, cfg.enabledCats);
-    state.rawDiscoveredSpots = discovered;
+    setStatus(forceLive ? 'Refreshing visible map area from Live Overpass...' : 'Scanning visible map area across selected sports...');
+    const res = await spotStore.getSpotsInBBox(bounds, cfg.enabledCats, { forceLive });
+    state.rawDiscoveredSpots = res.spots;
+    state.lastSpotSource = res.source;
+    updateDataSourceBadge(res.source);
     state.baseRoute = null;
     mapView.clearBaseRoute();
 
-    const filtered = scoreAndFilterSpots(discovered, {
+    const filtered = scoreAndFilterSpots(res.spots, {
       mode: 'explore',
       baseRoute: null,
       start: state.start,
@@ -420,7 +472,8 @@ async function scanExploreArea() {
     renderSpotList();
     $('spotsSection').style.display = 'block';
     $('reoptimizeBtn').style.display = filtered.length ? 'block' : 'none';
-    setStatus(`Discovered ${filtered.length} outdoor spots in view. Select spots to include, then click Plan Route.`);
+    const srcLabel = res.source === 'live' ? 'Live Overpass' : 'Prebuilt OSM tiles';
+    setStatus(`Found ${filtered.length} outdoor spots (${srcLabel}). Select spots to include, then click Plan Route.`);
   } catch (err) {
     setStatus(`Scan failed: ${err.message}`, 'error');
   } finally {
@@ -428,7 +481,7 @@ async function scanExploreArea() {
   }
 }
 
-async function runTripPlanner(useCachedSpots = false) {
+async function runTripPlanner(useCachedSpots = false, forceLive = false) {
   const btn = $('planBtn');
   btn.disabled = true;
   try {
@@ -441,7 +494,7 @@ async function runTripPlanner(useCachedSpots = false) {
       if (!state.start) throw new Error('Please enter or pick a Start location on the map.');
       if (state.mode === 'p2p' && !state.end) throw new Error('Please enter a Destination (or switch to Loop / Explore).');
     } else if (!state.start && state.selectedIds.size === 0 && !useCachedSpots) {
-      await scanExploreArea();
+      await scanExploreArea(forceLive);
       return;
     }
 
@@ -467,10 +520,13 @@ async function runTripPlanner(useCachedSpots = false) {
     }
 
     let overpassErrorMsg = '';
-    if (!useCachedSpots || !state.rawDiscoveredSpots.length) {
-      setStatus('Discovering outdoor spots from OpenStreetMap...');
+    if (!useCachedSpots || forceLive || !state.rawDiscoveredSpots.length) {
+      setStatus(forceLive ? 'Refreshing spots from Live Overpass...' : 'Loading outdoor spots...');
       try {
-        state.rawDiscoveredSpots = await fetchAdventureSpots(searchBBox, cfg.enabledCats);
+        const res = await spotStore.getSpotsInBBox(searchBBox, cfg.enabledCats, { forceLive });
+        state.rawDiscoveredSpots = res.spots;
+        state.lastSpotSource = res.source;
+        updateDataSourceBadge(res.source);
       } catch (overpassErr) {
         overpassErrorMsg = overpassErr?.message || 'Overpass API unavailable';
         state.rawDiscoveredSpots = [];
@@ -676,6 +732,25 @@ async function toggleSpotOnRoute(spotId) {
   } else {
     state.selectedIds.add(spotId);
     if (state.manualOrderIds) state.manualOrderIds.push(spotId);
+  }
+
+  const canBuildRouteNow =
+    Boolean(state.finalRoute) ||
+    (state.mode === 'p2p' && state.start && state.end) ||
+    (state.mode === 'loop' && state.start) ||
+    (state.mode === 'explore' && (state.start || state.selectedIds.size >= 2));
+
+  if (!canBuildRouteNow) {
+    if (state.selectedIds.has(spotId)) state.pinnedIds.add(spotId);
+    mapView.renderSpots(state.allSpots, {
+      selectedIds: state.selectedIds,
+      pinnedIds: state.pinnedIds,
+      weather: state.weather,
+      unit: state.unit
+    });
+    renderSpotList();
+    setStatus(`Spot selected (${state.selectedIds.size}). Set Start/Destination or select 2+ spots in Explore mode, then click Plan Route.`);
+    return;
   }
 
   try {
@@ -1221,12 +1296,23 @@ function wireEvents() {
     state.end = pt;
   });
 
-  $('scanMapBtn').addEventListener('click', scanExploreArea);
-  $('planBtn').addEventListener('click', () => runTripPlanner(false));
-  $('reoptimizeBtn').addEventListener('click', () => runTripPlanner(true));
+  $('scanMapBtn').addEventListener('click', () => scanExploreArea(false));
+  $('planBtn').addEventListener('click', () => runTripPlanner(false, false));
+  $('reoptimizeBtn').addEventListener('click', () => runTripPlanner(true, false));
+  $('refreshLiveOsmBtn').addEventListener('click', () => {
+    if (state.mode === 'explore' && !state.finalRoute) scanExploreArea(true);
+    else runTripPlanner(false, true);
+  });
 
   ['chkVF', 'chkPG', 'chkCL', 'chkCY', 'chkPK', 'chkSW'].forEach(id => {
-    $(id).addEventListener('change', syncQuickGearChipsFromActivities);
+    $(id).addEventListener('change', () => {
+      syncQuickGearChipsFromActivities();
+      refreshViewportBrowseSpots();
+    });
+  });
+
+  ['minDiff', 'maxDiff', 'includeUnrated', 'pgLaunchesOnly'].forEach(id => {
+    $(id).addEventListener('change', () => refreshViewportBrowseSpots());
   });
 
   $('gearChips').addEventListener('click', e => {
@@ -1380,7 +1466,7 @@ function wireEvents() {
 // ============================================================================
 // BOOTSTRAP
 // ============================================================================
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
   loadPrefs();
   populateBikeProfiles();
   syncQuickGearChipsFromActivities();
@@ -1392,8 +1478,13 @@ window.addEventListener('DOMContentLoaded', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  await spotStore.loadIndex();
+  updateDataSourceBadge();
+
   const shared = decodeTripHash(window.location.hash);
   if (shared) {
     restoreTripSnapshot(shared);
+  } else {
+    refreshViewportBrowseSpots();
   }
 });

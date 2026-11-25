@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PRESETS } from '../js/config.js';
+import { BIKE_PROFILES, OVERPASS_MIRRORS } from '../js/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -50,13 +50,13 @@ test('all local paths in index.html, manifest.webmanifest, and sw.js are relativ
   }
 });
 
-test('all 20 global presets have valid coordinates and modes', () => {
-  assert.equal(PRESETS.length, 20);
-  for (const p of PRESETS) {
-    assert.ok(['p2p', 'loop'].includes(p.mode));
-    assert.ok(p.start && Number.isFinite(p.start.lat) && Number.isFinite(p.start.lon));
-    if (p.mode === 'p2p') {
-      assert.ok(p.end && Number.isFinite(p.end.lat) && Number.isFinite(p.end.lon));
-    }
+test('BIKE_PROFILES and OVERPASS_MIRRORS are valid and non-empty', () => {
+  assert.ok(Object.keys(BIKE_PROFILES).length >= 4);
+  for (const [key, prof] of Object.entries(BIKE_PROFILES)) {
+    assert.ok(key && prof.label && Number.isFinite(prof.baseSpeed));
+  }
+  assert.ok(OVERPASS_MIRRORS.length >= 2);
+  for (const url of OVERPASS_MIRRORS) {
+    assert.ok(url.startsWith('https://'));
   }
 });

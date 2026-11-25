@@ -1,21 +1,21 @@
 import { CAT_META, OVERPASS_MIRRORS } from './config.js';
 import { classifyDifficulty } from './difficulty.js';
-import { haversineKm } from './geometry.js';
+import { bboxSpanKm, haversineKm } from './geometry.js';
 
 const CATEGORY_CAPS = {
-  vf: 120,
-  pg: 120,
-  cl: 120,
-  cy: 80,
-  pk: 80,
-  sw: 80
+  vf: 80,
+  pg: 80,
+  cl: 80,
+  cy: 60,
+  pk: 60,
+  sw: 60
 };
 
 const memorySpotCache = new Map();
 
 /**
- * Build a single Overpass QL query with separate per-category `out center tags <cap>;`
- * statements so dense categories (e.g., mountain peaks) never starve via ferratas or paragliding sites.
+ * Build a fast Overpass QL query using node/way selectors (`nw`) and separate
+ * per-category caps so dense categories never starve via ferratas or paragliding sites.
  * @param {[number, number, number, number]} bbox
  * @param {Record<string, boolean>} enabledCats
  */
@@ -24,26 +24,26 @@ export function buildAdventureQuery(bbox, enabledCats) {
   const blocks = [];
 
   if (enabledCats.vf) {
-    blocks.push(`(nwr["highway"="via_ferrata"](${b});nwr["sport"="via_ferrata"](${b});nwr["via_ferrata_scale"](${b}););out center tags ${CATEGORY_CAPS.vf};`);
+    blocks.push(`(nw["highway"="via_ferrata"](${b});nw["sport"="via_ferrata"](${b}););out center tags ${CATEGORY_CAPS.vf};`);
   }
   if (enabledCats.pg) {
-    blocks.push(`(nwr["sport"="free_flying"](${b});nwr["sport"="paragliding"](${b});nwr["free_flying:site"](${b});nwr["aeroway"="launch_site"](${b}););out center tags ${CATEGORY_CAPS.pg};`);
+    blocks.push(`(nw["sport"~"^(free_flying|paragliding)$"](${b});nw["free_flying:site"](${b}););out center tags ${CATEGORY_CAPS.pg};`);
   }
   if (enabledCats.cl) {
-    blocks.push(`(nwr["sport"="climbing"]["climbing"!="indoor"]["leisure"!="sports_centre"](${b});nwr["climbing"="crag"](${b});nwr["climbing"="boulder"](${b}););out center tags ${CATEGORY_CAPS.cl};`);
+    blocks.push(`(nw["sport"="climbing"]["climbing"!="indoor"]["leisure"!="sports_centre"](${b});nw["climbing"~"^(crag|boulder)$"](${b}););out center tags ${CATEGORY_CAPS.cl};`);
   }
   if (enabledCats.cy) {
-    blocks.push(`(nwr["sport"="canyoning"](${b});node["waterway"="waterfall"]["name"](${b}););out center tags ${CATEGORY_CAPS.cy};`);
+    blocks.push(`(nw["sport"="canyoning"](${b});node["waterway"="waterfall"]["name"](${b}););out center tags ${CATEGORY_CAPS.cy};`);
   }
   if (enabledCats.pk) {
     blocks.push(`(node["mountain_pass"="yes"](${b});node["natural"="peak"]["name"]["ele"](${b}););out center tags ${CATEGORY_CAPS.pk};`);
   }
   if (enabledCats.sw) {
-    blocks.push(`(nwr["natural"="hot_spring"](${b});nwr["leisure"="swimming_area"](${b});nwr["bathing"="yes"](${b}););out center tags ${CATEGORY_CAPS.sw};`);
+    blocks.push(`(nw["natural"="hot_spring"](${b});nw["leisure"="swimming_area"](${b}););out center tags ${CATEGORY_CAPS.sw};`);
   }
 
   if (!blocks.length) return '';
-  return `[out:json][timeout:28];${blocks.join('')}`;
+  return `[out:json][timeout:18][maxsize:16777216];${blocks.join('')}`;
 }
 
 /**
@@ -128,11 +128,11 @@ export function parseAndDedupeSpots(elements) {
 /**
  * Execute an Overpass QL query across multiple public mirrors with AbortController timeout.
  */
-export async function queryOverpass(ql, { fetchImpl = fetch, timeoutMs = 24000 } = {}) {
+export async function queryOverpass(ql, { fetchImpl = fetch, timeoutMs = 16000 } = {}) {
   let lastErr;
   for (const mirror of OVERPASS_MIRRORS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
     try {
       const res = await fetchImpl(mirror, {
         method: 'POST',
@@ -145,7 +145,9 @@ export async function queryOverpass(ql, { fetchImpl = fetch, timeoutMs = 24000 }
       }
       lastErr = new Error(`Overpass HTTP ${res.status}`);
     } catch (err) {
-      lastErr = err;
+      lastErr = (err?.name === 'AbortError' || err === 'timeout')
+        ? new Error('Overpass mirror timed out')
+        : err;
     } finally {
       clearTimeout(timer);
     }
@@ -165,6 +167,11 @@ function getCacheKey(bbox, enabledCats) {
 export async function fetchAdventureSpots(bbox, enabledCats, opts = {}) {
   const ql = buildAdventureQuery(bbox, enabledCats);
   if (!ql) return [];
+
+  const span = bboxSpanKm(bbox);
+  if (span.widthKm > 220 || span.heightKm > 220) {
+    throw new Error('Search area is too wide (>220 km) — shorten the corridor or lower Search Radius.');
+  }
 
   const cacheKey = getCacheKey(bbox, enabledCats);
   if (!opts.bypassCache && memorySpotCache.has(cacheKey)) {
@@ -207,12 +214,12 @@ export async function fetchSupportPOIs(bbox, enabledSupportSet, opts = {}) {
 
   if (enabledSupportSet.has('water')) parts.push(`node["amenity"="drinking_water"](${b});`);
   if (enabledSupportSet.has('camp')) {
-    parts.push(`nwr["tourism"="camp_site"](${b});`);
-    parts.push(`nwr["tourism"="alpine_hut"](${b});`);
-    parts.push(`nwr["amenity"="shelter"](${b});`);
+    parts.push(`nw["tourism"="camp_site"](${b});`);
+    parts.push(`nw["tourism"="alpine_hut"](${b});`);
+    parts.push(`nw["amenity"="shelter"](${b});`);
   }
   if (enabledSupportSet.has('bike')) {
-    parts.push(`nwr["shop"="bicycle"](${b});`);
+    parts.push(`nw["shop"="bicycle"](${b});`);
     parts.push(`node["amenity"="bicycle_repair_station"](${b});`);
   }
   if (enabledSupportSet.has('train')) {
@@ -220,12 +227,12 @@ export async function fetchSupportPOIs(bbox, enabledSupportSet, opts = {}) {
     parts.push(`node["aerialway"="station"](${b});`);
   }
   if (enabledSupportSet.has('food')) {
-    parts.push(`nwr["shop"="supermarket"](${b});`);
-    parts.push(`nwr["shop"="bakery"](${b});`);
+    parts.push(`nw["shop"="supermarket"](${b});`);
+    parts.push(`nw["shop"="bakery"](${b});`);
   }
 
   if (!parts.length) return [];
-  const ql = `[out:json][timeout:20];(${parts.join('')});out center tags 220;`;
+  const ql = `[out:json][timeout:18][maxsize:16777216];(${parts.join('')});out center tags 180;`;
   const data = await queryOverpass(ql, opts);
 
   return (data.elements || [])

@@ -148,9 +148,14 @@ export function parseBRouterFeature(feat, sourceLabel = 'BRouter OSM') {
 
 async function fetchWithTimeout(url, timeoutMs, fetchImpl) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
   try {
     return await fetchImpl(url, { signal: controller.signal });
+  } catch (err) {
+    if (err?.name === 'AbortError' || err === 'timeout') {
+      throw new Error('Request timed out');
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -203,23 +208,9 @@ export async function enrichElevationOpenMeteo(coords, fetchImpl = fetch, timeou
   });
 }
 
-function buildBRouterAttempts(profile) {
-  const preferBikerouter = BIKE_PROFILES[profile]?.preferServer === 'bikerouter' || profile === 'gravel';
-  if (preferBikerouter) {
-    return [
-      { base: 'https://bikerouter.de/brouter', profile, label: 'Bikerouter OSM' },
-      { base: 'https://brouter.de/brouter', profile: profile === 'gravel' ? 'trekking' : profile, label: 'BRouter OSM' }
-    ];
-  }
-  return [
-    { base: 'https://brouter.de/brouter', profile, label: 'BRouter OSM' },
-    { base: 'https://bikerouter.de/brouter', profile, label: 'Bikerouter OSM' }
-  ];
-}
-
 /**
  * Compute an optimal bicycle route between ordered waypoints.
- * Tries BRouter / Bikerouter OSM profiles first (preserving full elevation and surface tags),
+ * Uses CORS-friendly BRouter OSM profiles first (preserving full elevation and surface tags),
  * then falls back to OSRM Cycling + Open-Meteo Elevation.
  * @param {Array<{ lat: number, lon: number }>} waypoints
  * @param {string} profile
@@ -232,24 +223,23 @@ export async function computeBikeRoute(waypoints, profile = 'trekking', opts = {
   const fetchImpl = opts.fetchImpl || fetch;
   const timeoutMs = opts.timeoutMs || 15000;
   const lonlats = waypoints.map(w => `${w.lon.toFixed(5)},${w.lat.toFixed(5)}`).join('|');
+  const brouterProfile = BIKE_PROFILES[profile] ? profile : 'trekking';
 
   let brouterErrMsg = '';
-  for (const attempt of buildBRouterAttempts(profile)) {
-    const url = `${attempt.base}?lonlats=${lonlats}&profile=${encodeURIComponent(attempt.profile)}&alternativeidx=0&format=geojson`;
-    try {
-      const res = await fetchWithTimeout(url, timeoutMs, fetchImpl);
-      if (res.ok) {
-        const geo = await res.json();
-        const feat = geo?.features?.[0];
-        if (feat?.geometry?.coordinates?.length > 1) {
-          return parseBRouterFeature(feat, attempt.label);
-        }
-      } else {
-        brouterErrMsg = await res.text().catch(() => `HTTP ${res.status}`);
+  const brouterUrl = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${encodeURIComponent(brouterProfile)}&alternativeidx=0&format=geojson`;
+  try {
+    const res = await fetchWithTimeout(brouterUrl, timeoutMs, fetchImpl);
+    if (res.ok) {
+      const geo = await res.json();
+      const feat = geo?.features?.[0];
+      if (feat?.geometry?.coordinates?.length > 1) {
+        return parseBRouterFeature(feat, 'BRouter OSM');
       }
-    } catch (err) {
-      brouterErrMsg = err?.message || 'BRouter request failed';
+    } else {
+      brouterErrMsg = await res.text().catch(() => `HTTP ${res.status}`);
     }
+  } catch (err) {
+    brouterErrMsg = err?.name === 'AbortError' ? 'BRouter routing timed out' : (err?.message || 'BRouter request failed');
   }
 
   // Fallback: OSRM Cycling + Open-Meteo Elevation

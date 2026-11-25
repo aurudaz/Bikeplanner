@@ -1,9 +1,6 @@
 import {
   BIKE_PROFILES,
-  CAT_META,
-  CAT_ORDER,
-  PRESETS,
-  PRESET_REGIONS
+  CAT_META
 } from './config.js';
 import {
   bboxSpanKm,
@@ -58,7 +55,6 @@ const GEAR_KEY = 'vv_gear_checked_v1';
 
 const state = {
   mode: 'p2p', // 'p2p' | 'loop' | 'explore'
-  regionFilter: 'all',
   unit: 'metric', // 'metric' | 'imperial'
   theme: 'dark', // 'dark' | 'light'
   routeColorMode: 'solid',
@@ -71,11 +67,11 @@ const state = {
   allSpots: [],
   selectedIds: new Set(),
   pinnedIds: new Set(),
-  manualOrderIds: null, // array of spot IDs when user manually reorders
+  manualOrderIds: null,
   stages: [],
   activeTab: 'selected',
   supportEnabled: new Set(),
-  waymarkedEnabled: false,
+  waymarkedEnabled: true,
   weather: null,
   gearChecked: {}
 };
@@ -99,19 +95,27 @@ function applyTheme() {
 }
 
 function applyUnitButton() {
-  $('unitToggleBtn').textContent = state.unit === 'metric' ? 'km' : 'mi';
+  $('unitToggleBtn').textContent = state.unit === 'metric' ? 'Units: km / m' : 'Units: mi / ft';
   updateSliderLabels();
 }
 
-function setStatus(msg, isError = false) {
+function setStatus(msg, level = 'info') {
   const el = $('statusBar');
   if (!msg) {
     el.style.display = 'none';
     return;
   }
+  const normalized = level === true ? 'error' : level === false ? 'info' : level;
   el.textContent = msg;
-  el.className = isError ? 'error' : '';
+  el.className = normalized === 'error' ? 'error' : normalized === 'warn' ? 'warn' : '';
   el.style.display = 'block';
+}
+
+function updateWaymarkedUI(active) {
+  state.waymarkedEnabled = active;
+  const btn = $('bikePathsToggleBtn');
+  btn.classList.toggle('active', active);
+  btn.textContent = active ? '🚲 Bike Routes: ON' : '🚲 Bike Routes: OFF';
 }
 
 // ============================================================================
@@ -145,7 +149,8 @@ const mapView = new MapView('map', {
   onSpotAction: (action, spotId) => {
     if (action === 'toggle') toggleSpotOnRoute(spotId);
     else if (action === 'pin') togglePinSpot(spotId);
-  }
+  },
+  onWaymarkedChange: active => updateWaymarkedUI(active)
 });
 
 const elevChart = new ElevationChart({
@@ -157,40 +162,8 @@ const elevChart = new ElevationChart({
 });
 
 // ============================================================================
-// PRESETS & PROFILE DROPDOWNS
+// PROFILE DROPDOWN, MODE, INPUTS, GEOCODING & GPS
 // ============================================================================
-function renderPresetRegions() {
-  const bar = $('presetRegionBar');
-  bar.innerHTML = '';
-  for (const reg of PRESET_REGIONS) {
-    const btn = document.createElement('button');
-    btn.className = `region-tab ${state.regionFilter === reg.id ? 'active' : ''}`;
-    btn.textContent = reg.label;
-    btn.addEventListener('click', () => {
-      state.regionFilter = reg.id;
-      renderPresetRegions();
-      renderPresetList();
-    });
-    bar.appendChild(btn);
-  }
-}
-
-function renderPresetList() {
-  const container = $('presetList');
-  container.innerHTML = '';
-  const items = state.regionFilter === 'all'
-    ? PRESETS
-    : PRESETS.filter(p => p.region === state.regionFilter);
-
-  for (const p of items) {
-    const btn = document.createElement('button');
-    btn.className = 'preset-btn';
-    btn.textContent = `${p.flag} ${p.label}`;
-    btn.addEventListener('click', () => applyPreset(p, true));
-    container.appendChild(btn);
-  }
-}
-
 function populateBikeProfiles() {
   const sel = $('bikeProfile');
   sel.innerHTML = '';
@@ -202,47 +175,10 @@ function populateBikeProfiles() {
   }
 }
 
-function applyPreset(p, autoRun = true) {
-  setMode(p.mode);
-  state.start = p.start ? { ...p.start } : null;
-  state.end = p.end ? { ...p.end } : null;
-  $('startInput').value = p.start?.name || '';
-  $('endInput').value = p.end?.name || '';
-  $('detourSlider').value = p.detour;
-  $('radiusSlider').value = p.radius;
-  $('bikeProfile').value = p.profile;
-
-  const catMap = {
-    vf: ['chkVF', 'cntVF'],
-    pg: ['chkPG', 'cntPG'],
-    cl: ['chkCL', 'cntCL'],
-    cy: ['chkCY', 'cntCY'],
-    pk: ['chkPK', 'cntPK'],
-    sw: ['chkSW', 'cntSW']
-  };
-  for (const [cat, [chkId, cntId]] of Object.entries(catMap)) {
-    const cfg = p.cats?.[cat] || [false, 1];
-    $(chkId).checked = Boolean(cfg[0]);
-    $(cntId).value = cfg[1];
-  }
-
-  state.pinnedIds.clear();
-  state.manualOrderIds = null;
-  syncQuickGearChipsFromActivities();
-  updateSliderLabels();
-  mapView.renderEndpoints(state.start, state.end, state.mode);
-  if (state.start) mapView.setView(state.start.lat, state.start.lon, 9);
-  if (autoRun) runTripPlanner();
-}
-
-// ============================================================================
-// MODE, INPUTS, GEOCODING & GPS
-// ============================================================================
 function setMode(mode) {
   state.mode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   $('endGroup').style.display = mode === 'p2p' ? 'block' : 'none';
-  $('startGroup').style.display = mode === 'explore' ? 'block' : 'block';
   $('exploreHintBox').style.display = mode === 'explore' ? 'flex' : 'none';
   $('detourSliderWrap').style.display = mode === 'explore' ? 'none' : 'block';
   $('detourLabel').textContent = mode === 'p2p' ? 'Extra Detour Budget' : 'Target Loop Distance';
@@ -265,6 +201,13 @@ function setPicking(target) {
   $('pickEndBtn').classList.toggle('active', state.picking === 'end');
   $('pickHint').textContent = state.picking ? `Click map for ${state.picking.toUpperCase()}` : '';
   mapView.setCrosshair(Boolean(state.picking));
+}
+
+function syncActivityTileStates() {
+  document.querySelectorAll('.activity-tile').forEach(tile => {
+    const cb = tile.querySelector('input[type="checkbox"]');
+    if (cb) tile.classList.toggle('active', cb.checked);
+  });
 }
 
 function attachAutocomplete(inputEl, sugEl, onSelect) {
@@ -368,6 +311,7 @@ function syncQuickGearChipsFromActivities() {
     if (g === 'pg') chip.classList.toggle('active', $('chkPG').checked);
     if (g === 'cl') chip.classList.toggle('active', $('chkCL').checked);
   });
+  syncActivityTileStates();
   updateGearWeightBadge();
 }
 
@@ -435,7 +379,7 @@ async function scanExploreArea() {
   const bounds = mapView.getBoundsArray();
   const span = bboxSpanKm(bounds);
   if (span.widthKm > 180 || span.heightKm > 180) {
-    setStatus(`Visible area is ${Math.round(span.widthKm)}×${Math.round(span.heightKm)} km — zoom in closer (<180 km) to scan Overpass safely.`, true);
+    setStatus(`Visible area is ${Math.round(span.widthKm)}×${Math.round(span.heightKm)} km — zoom in closer (<180 km) to scan Overpass safely.`, 'warn');
     return;
   }
 
@@ -443,7 +387,7 @@ async function scanExploreArea() {
   btn.disabled = true;
   try {
     const cfg = getPlannerInputs();
-    setStatus('Scanning visible map area across all selected sports...');
+    setStatus('Scanning visible map area across selected sports...');
     const discovered = await fetchAdventureSpots(bounds, cfg.enabledCats);
     state.rawDiscoveredSpots = discovered;
     state.baseRoute = null;
@@ -476,9 +420,9 @@ async function scanExploreArea() {
     renderSpotList();
     $('spotsSection').style.display = 'block';
     $('reoptimizeBtn').style.display = filtered.length ? 'block' : 'none';
-    setStatus(`Discovered ${filtered.length} outdoor spots in view. Select spots to include, then click "Optimize Bike Route".`);
+    setStatus(`Discovered ${filtered.length} outdoor spots in view. Select spots to include, then click Plan Route.`);
   } catch (err) {
-    setStatus(`Scan error: ${err.message}`, true);
+    setStatus(`Scan failed: ${err.message}`, 'error');
   } finally {
     btn.disabled = false;
   }
@@ -494,8 +438,8 @@ async function runTripPlanner(useCachedSpots = false) {
     if (state.mode !== 'explore') {
       setStatus('Resolving start & destination...');
       await resolveTextEndpoints();
-      if (!state.start) throw new Error('Please enter or pick a Start location.');
-      if (state.mode === 'p2p' && !state.end) throw new Error('Please enter a Destination (or switch to Hub Loop / Explore Area).');
+      if (!state.start) throw new Error('Please enter or pick a Start location on the map.');
+      if (state.mode === 'p2p' && !state.end) throw new Error('Please enter a Destination (or switch to Loop / Explore).');
     } else if (!state.start && state.selectedIds.size === 0 && !useCachedSpots) {
       await scanExploreArea();
       return;
@@ -506,7 +450,7 @@ async function runTripPlanner(useCachedSpots = false) {
     let searchBBox;
     if (state.mode === 'p2p') {
       if (!useCachedSpots || !state.baseRoute) {
-        setStatus('Computing baseline direct bike route...');
+        setStatus('Computing baseline bike route...');
         state.baseRoute = await computeBikeRoute([state.start, state.end], cfg.profile);
         mapView.drawBaseRoute(state.baseRoute);
       }
@@ -514,7 +458,7 @@ async function runTripPlanner(useCachedSpots = false) {
     } else if (state.mode === 'loop') {
       state.baseRoute = null;
       mapView.clearBaseRoute();
-      const hubRadius = Math.max(cfg.radiusKm, Math.min(45, cfg.budgetKm * 0.45));
+      const hubRadius = Math.max(cfg.radiusKm, Math.min(35, cfg.budgetKm * 0.42));
       searchBBox = getRouteBBox([[state.start.lat, state.start.lon]], hubRadius);
     } else {
       state.baseRoute = null;
@@ -522,9 +466,15 @@ async function runTripPlanner(useCachedSpots = false) {
       searchBBox = mapView.getBoundsArray();
     }
 
+    let overpassErrorMsg = '';
     if (!useCachedSpots || !state.rawDiscoveredSpots.length) {
-      setStatus('Querying OpenStreetMap open data (Via Ferrata, Paragliding, Climbing, Passes, Swim)...');
-      state.rawDiscoveredSpots = await fetchAdventureSpots(searchBBox, cfg.enabledCats);
+      setStatus('Discovering outdoor spots from OpenStreetMap...');
+      try {
+        state.rawDiscoveredSpots = await fetchAdventureSpots(searchBBox, cfg.enabledCats);
+      } catch (overpassErr) {
+        overpassErrorMsg = overpassErr?.message || 'Overpass API unavailable';
+        state.rawDiscoveredSpots = [];
+      }
     }
 
     const filtered = scoreAndFilterSpots(state.rawDiscoveredSpots, {
@@ -551,7 +501,12 @@ async function runTripPlanner(useCachedSpots = false) {
       });
     }
 
-    await routeThroughSelectedSpots(state.mode !== 'explore', cfg.budgetKm);
+    if (overpassErrorMsg && state.mode === 'p2p' && state.baseRoute) {
+      state.finalRoute = state.baseRoute;
+      refreshRouteAnalyticsOnly(true);
+    } else {
+      await routeThroughSelectedSpots(state.mode !== 'explore', cfg.budgetKm);
+    }
 
     const midPt = state.finalRoute.coords[Math.floor(state.finalRoute.coords.length / 2)];
     fetchWeather(midPt[0], midPt[1]).then(wx => {
@@ -571,7 +526,7 @@ async function runTripPlanner(useCachedSpots = false) {
     if (state.supportEnabled.size > 0) refreshSupportLayer();
 
     $('spotsSection').style.display = 'block';
-    $('reoptimizeBtn').style.display = 'block';
+    $('reoptimizeBtn').style.display = state.rawDiscoveredSpots.length ? 'block' : 'none';
     $('telemetry').style.display = 'flex';
     $('analyticsDrawer').classList.add('open');
     setTimeout(() => {
@@ -579,15 +534,22 @@ async function runTripPlanner(useCachedSpots = false) {
       elevChart.draw(-1);
     }, 180);
 
-    const selCount = state.selectedIds.size;
-    setStatus(
-      filtered.length
-        ? `Found ${filtered.length} spots · Routed through ${selCount} spot${selCount === 1 ? '' : 's'}. Click any spot to add, remove, or pin.`
-        : 'Route built, but no matching spots found here. Try widening Search Radius or enabling more categories.'
-    );
+    if (overpassErrorMsg) {
+      setStatus(
+        `Bike route ready, but OSM spot discovery timed out (${overpassErrorMsg}). Lower Search Radius in More Options or enable fewer sports and retry.`,
+        'warn'
+      );
+    } else {
+      const selCount = state.selectedIds.size;
+      setStatus(
+        filtered.length
+          ? `Found ${filtered.length} spots · Routed through ${selCount} spot${selCount === 1 ? '' : 's'}. Click any spot to add, remove, or pin.`
+          : 'Route built, but no matching spots found in this corridor. Try widening Search Radius in More Options.'
+      );
+    }
   } catch (err) {
     console.error(err);
-    setStatus(`Error: ${err.message}`, true);
+    setStatus(`Error: ${err.message}`, 'error');
   } finally {
     btn.disabled = false;
   }
@@ -610,7 +572,6 @@ function buildWaypointsForRoute(ordered) {
     }
     return [state.start, ...ordered, state.start];
   }
-  // Explore mode
   if (state.start && ordered.length) return [state.start, ...ordered, state.start];
   if (ordered.length >= 2) return [...ordered, ordered[0]];
   if (ordered.length === 1 && state.start) return [state.start, ordered[0], state.start];
@@ -642,7 +603,6 @@ async function routeThroughSelectedSpots(enforceBudget = false, budgetKm = 40) {
   setStatus(`Routing optimal bike path through ${ordered.length} spot${ordered.length === 1 ? '' : 's'}...`);
   let { route } = await computeRouteWithUnroutableRecovery(ordered, cfg.profile);
 
-  // Iterative budget trimmer (up to 3 passes, never trims pinned spots)
   if (enforceBudget) {
     for (let pass = 0; pass < 3; pass++) {
       ordered = getOrderedSelectedSpots();
@@ -663,7 +623,6 @@ async function routeThroughSelectedSpots(enforceBudget = false, budgetKm = 40) {
   state.finalRoute = route;
   ordered = getOrderedSelectedSpots();
 
-  // Compute hike-to-spot approach gaps for every selected spot
   for (const s of state.allSpots) {
     s.approach = state.selectedIds.has(s.id) ? computeApproachGap(s, route.coords) : null;
   }
@@ -726,7 +685,7 @@ async function toggleSpotOnRoute(spotId) {
     $('analyticsDrawer').classList.add('open');
     setStatus(`Updated route (${state.selectedIds.size} spot${state.selectedIds.size === 1 ? '' : 's'} included).`);
   } catch (err) {
-    setStatus(`Could not route via that spot: ${err.message}`, true);
+    setStatus(`Could not route via that spot: ${err.message}`, 'error');
   }
 }
 
@@ -944,7 +903,7 @@ function renderSpotList() {
   container.innerHTML = '';
 
   if (!list.length) {
-    container.innerHTML = '<div class="muted-body" style="padding:6px;">No spots match this filter. Try switching to "All Nearby" or clearing filters.</div>';
+    container.innerHTML = '<div class="muted-body" style="padding:6px;">No spots match this filter. Switch to "All Nearby" or clear filters.</div>';
     return;
   }
 
@@ -1123,7 +1082,7 @@ async function copyToClipboard(text, okMsg) {
     await navigator.clipboard.writeText(text);
     setStatus(okMsg);
   } catch {
-    setStatus('Copied preview ready — select text to copy manually.');
+    setStatus('Preview ready — select and copy text manually.');
   }
 }
 
@@ -1132,7 +1091,7 @@ function renderSavedTripsModal() {
   const trips = loadSavedTrips();
   body.innerHTML = '';
   if (!trips.length) {
-    body.innerHTML = '<div class="muted-body">No trips saved yet. Plan a route and click 💾 Save on the map bar.</div>';
+    body.innerHTML = '<div class="muted-body">No trips saved yet. Plan a route and open Export / Save to store one locally.</div>';
     return;
   }
   for (const t of trips) {
@@ -1162,7 +1121,7 @@ function renderSavedTripsModal() {
 
 function openExportModal() {
   if (!state.finalRoute) {
-    setStatus('Plan a route first before exporting or sharing.', true);
+    setStatus('Plan a route first before exporting or saving.', 'warn');
     return;
   }
   const ordered = getOrderedSelectedSpots();
@@ -1235,7 +1194,7 @@ function wireEvents() {
 
   $('locateMeBtn').addEventListener('click', () => {
     if (!navigator.geolocation) {
-      setStatus('Geolocation is not supported in this browser.', true);
+      setStatus('Geolocation is not supported in this browser.', 'error');
       return;
     }
     setStatus('Locating your position...');
@@ -1250,7 +1209,7 @@ function wireEvents() {
         mapView.setView(lat, lon, 11);
         setStatus(`Start set to your location (${name}).`);
       },
-      err => setStatus(`GPS error: ${err.message}`, true),
+      err => setStatus(`GPS error: ${err.message}`, 'error'),
       { enableHighAccuracy: true, timeout: 8000 }
     );
   });
@@ -1266,7 +1225,7 @@ function wireEvents() {
   $('planBtn').addEventListener('click', () => runTripPlanner(false));
   $('reoptimizeBtn').addEventListener('click', () => runTripPlanner(true));
 
-  ['chkVF', 'chkPG', 'chkCL'].forEach(id => {
+  ['chkVF', 'chkPG', 'chkCL', 'chkCY', 'chkPK', 'chkSW'].forEach(id => {
     $(id).addEventListener('change', syncQuickGearChipsFromActivities);
   });
 
@@ -1278,10 +1237,10 @@ function wireEvents() {
     if (state.finalRoute) refreshRouteAnalyticsOnly(false);
   });
 
-  $('waymarkedChip').addEventListener('click', () => {
-    state.waymarkedEnabled = !state.waymarkedEnabled;
-    $('waymarkedChip').classList.toggle('active', state.waymarkedEnabled);
-    mapView.toggleWaymarkedOverlay(state.waymarkedEnabled);
+  $('bikePathsToggleBtn').addEventListener('click', () => {
+    const next = !state.waymarkedEnabled;
+    mapView.toggleWaymarkedOverlay(next);
+    updateWaymarkedUI(next);
   });
 
   $('supportChips').addEventListener('click', e => {
@@ -1352,7 +1311,7 @@ function wireEvents() {
       renderSavedTripsModal();
       setStatus(`Imported ${arr.length} trip(s).`);
     } catch {
-      setStatus('Invalid trip JSON file.', true);
+      setStatus('Invalid trip JSON file.', 'error');
     }
     e.target.value = '';
   });
@@ -1404,7 +1363,6 @@ function wireEvents() {
 
   $('printTripBtn').addEventListener('click', () => window.print());
 
-  // Close modals on backdrop click or Escape
   ['gearModal', 'savedModal', 'exportModal'].forEach(id => {
     $(id).addEventListener('click', e => {
       if (e.target === $(id)) $(id).style.display = 'none';
@@ -1425,8 +1383,8 @@ function wireEvents() {
 window.addEventListener('DOMContentLoaded', () => {
   loadPrefs();
   populateBikeProfiles();
-  renderPresetRegions();
-  renderPresetList();
+  syncQuickGearChipsFromActivities();
+  updateWaymarkedUI(true);
   wireEvents();
   updateGearWeightBadge();
 
@@ -1437,7 +1395,5 @@ window.addEventListener('DOMContentLoaded', () => {
   const shared = decodeTripHash(window.location.hash);
   if (shared) {
     restoreTripSnapshot(shared);
-  } else {
-    applyPreset(PRESETS[0], false);
   }
 });

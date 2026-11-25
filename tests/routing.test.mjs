@@ -69,6 +69,6 @@ test('computeBikeRoute falls back from BRouter to OSRM + Open-Meteo cleanly', as
   assert.equal(route.minElev, 570);
   assert.equal(route.maxElev, 820);
   assert.ok(calls.some(u => u.includes('brouter.de')));
-  assert.ok(calls.some(u => u.includes('bikerouter.de')));
+  assert.ok(!calls.some(u => u.includes('bikerouter.de')));
   assert.ok(calls.some(u => u.includes('project-osrm.org')));
 });

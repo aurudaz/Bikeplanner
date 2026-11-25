@@ -19,13 +19,13 @@ function gradeColor(gradePct) {
 }
 
 export class MapView {
-  constructor(elementId, { onMapClick, onSpotAction }) {
+  constructor(elementId, { onMapClick, onSpotAction, onWaymarkedChange }) {
     this.onSpotAction = onSpotAction;
-    this.map = L.map(elementId, { zoomControl: false }).setView([46.65, 8.2], 6);
+    this.map = L.map(elementId, { zoomControl: false }).setView([46.55, 8.1], 8);
     L.control.zoom({ position: 'topright' }).addTo(this.map);
 
     this.tileLayers = {
-      'CyclOSM (Best for Bike)': L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {
+      'CyclOSM (Bike Paths & Surfaces)': L.tileLayer('https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', {
         maxZoom: 20,
         attribution: '© OpenStreetMap, CyclOSM'
       }),
@@ -42,15 +42,25 @@ export class MapView {
         attribution: '© Esri, Maxar'
       })
     };
-    this.tileLayers['CyclOSM (Best for Bike)'].addTo(this.map);
+    this.tileLayers['CyclOSM (Bike Paths & Surfaces)'].addTo(this.map);
 
     this.waymarkedLayer = L.tileLayer('https://tile.waymarkedtrails.org/cycling/{z}/{x}/{y}.png', {
       maxZoom: 18,
-      opacity: 0.78,
+      opacity: 0.85,
       attribution: '© Waymarked Trails, OSM'
     });
+    this.waymarkedLayer.addTo(this.map);
 
     L.control.layers(this.tileLayers, { 'Official Bike Routes (Waymarked)': this.waymarkedLayer }, { position: 'topright' }).addTo(this.map);
+
+    if (onWaymarkedChange) {
+      this.map.on('overlayadd', e => {
+        if (e.layer === this.waymarkedLayer) onWaymarkedChange(true);
+      });
+      this.map.on('overlayremove', e => {
+        if (e.layer === this.waymarkedLayer) onWaymarkedChange(false);
+      });
+    }
 
     this.layers = {
       baseRoute: L.layerGroup().addTo(this.map),

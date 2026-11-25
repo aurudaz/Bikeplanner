@@ -1,0 +1,18 @@
+{
+  "name": "VeloVertical — Bikepacking & Mountain Sports Planner",
+  "short_name": "VeloVertical",
+  "description": "Global open-data bikepacking trip planner with via ferrata, paragliding, climbing, canyoning, passes and wild swims.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "./assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

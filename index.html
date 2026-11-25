@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>VeloVertical — Global Bikepacking, Via Ferrata &amp; Paragliding Planner</title>
+  <link rel="icon" type="image/svg+xml" href="./assets/icon.svg" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <!-- SIDEBAR -->
+  <aside id="sidebar" class="open">
+    <div class="brand">
+      <div class="brand-left">
+        <img src="./assets/icon.svg" alt="VeloVertical logo" class="brand-logo" />
+        <div>
+          <h1>VeloVertical</h1>
+          <small>Global Open-Data Bikepacking &amp; Mountain Sports</small>
+        </div>
+      </div>
+      <div class="brand-actions">
+        <button id="themeToggleBtn" class="icon-btn compact" title="Toggle Dark/Light Theme">☀️</button>
+        <button id="unitToggleBtn" class="icon-btn compact" title="Toggle Metric/Imperial">km</button>
+        <button id="openGearModalBtn" class="icon-btn compact" title="Packing Checklist">🎒</button>
+        <button id="openSavedModalBtn" class="icon-btn compact" title="Saved Trips">💾</button>
+        <button id="shareUrlBtn" class="icon-btn compact" title="Copy Shareable Link">🔗</button>
+        <button id="closeSidebarBtn" class="icon-btn compact" title="Close Menu">✕</button>
+      </div>
+    </div>
+
+    <div class="sidebar-scroll">
+      <!-- Global Quick Presets -->
+      <div class="section">
+        <div class="section-title">
+          <span>Quick Presets</span>
+          <span class="muted-note">Worldwide Open Data</span>
+        </div>
+        <div class="region-tabs" id="presetRegionBar"></div>
+        <div class="presets" id="presetList"></div>
+      </div>
+
+      <!-- Trip Mode & Routing -->
+      <div class="section">
+        <div class="section-title">
+          <span>Route &amp; Destination</span>
+          <span id="pickHint" class="accent-hint"></span>
+        </div>
+
+        <div class="mode-toggle three">
+          <button class="mode-btn active" id="modeP2P" data-mode="p2p">A → B</button>
+          <button class="mode-btn" id="modeLoop" data-mode="loop">🔄 Hub Loop</button>
+          <button class="mode-btn" id="modeExplore" data-mode="explore">🧭 Explore Area</button>
+        </div>
+
+        <div class="input-group" id="startGroup">
+          <div class="input-row">
+            <input type="text" id="startInput" placeholder="Start town or region (anywhere worldwide)" autocomplete="off" />
+            <button class="icon-btn" id="pickStartBtn" title="Click map to set Start">📍</button>
+            <button class="icon-btn" id="locateMeBtn" title="Use my GPS location">🎯</button>
+          </div>
+          <div class="suggestions" id="startSuggestions"></div>
+        </div>
+
+        <div class="input-group" id="endGroup">
+          <div class="input-row">
+            <input type="text" id="endInput" placeholder="Destination (e.g., Andermatt, Annecy, Telluride)" autocomplete="off" />
+            <button class="icon-btn" id="pickEndBtn" title="Click map to set Destination">🏁</button>
+            <button class="icon-btn" id="swapBtn" title="Swap start & end">⇅</button>
+          </div>
+          <div class="suggestions" id="endSuggestions"></div>
+        </div>
+
+        <div id="exploreHintBox" class="explore-hint" style="display:none;">
+          <span>Pan/zoom anywhere on the map to discover all sports, filter, pick spots, then click Optimize Route.</span>
+          <button class="mini-btn route-add" id="scanMapBtn" type="button">🔍 Scan Visible Map Area</button>
+        </div>
+
+        <div style="margin-top:8px;">
+          <label class="field-label" for="bikeProfile">Bike Routing Profile (BRouter / Bikerouter OSM)</label>
+          <select id="bikeProfile"></select>
+        </div>
+      </div>
+
+      <!-- Distance, Detour Budget & Daily Stage Pace -->
+      <div class="section">
+        <div class="section-title">Distance, Detour &amp; Stage Pace</div>
+        <div class="slider-wrap" id="detourSliderWrap">
+          <div class="slider-header">
+            <span id="detourLabel">Extra Detour Budget</span>
+            <strong id="detourVal">+35 km</strong>
+          </div>
+          <input type="range" id="detourSlider" min="5" max="160" step="5" value="35" />
+          <div id="budgetMeterWrap" class="budget-meter-wrap" style="display:none;">
+            <div class="budget-meter-track">
+              <div id="budgetMeterBar" class="budget-meter-fill"></div>
+            </div>
+            <div id="budgetMeterLabel" class="budget-meter-label"></div>
+          </div>
+        </div>
+
+        <div class="slider-wrap">
+          <div class="slider-header">
+            <span>Search Corridor Radius</span>
+            <strong id="radiusVal">12 km</strong>
+          </div>
+          <input type="range" id="radiusSlider" min="3" max="40" step="1" value="12" />
+        </div>
+
+        <div class="slider-wrap" style="margin-bottom:0;">
+          <div class="slider-header">
+            <span>Target Daily Stage Pace</span>
+            <strong id="dailyHoursVal">7.5 h/day</strong>
+          </div>
+          <input type="range" id="dailyHoursSlider" min="4" max="12" step="0.5" value="7.5" />
+        </div>
+      </div>
+
+      <!-- Adventure Activities -->
+      <div class="section">
+        <div class="section-title">
+          <span>Adventure Spots &amp; Max Count</span>
+          <span class="muted-note">Auto-balanced</span>
+        </div>
+        <div class="activity-grid">
+          <div class="activity-row vf">
+            <label><input type="checkbox" id="chkVF" checked /> 🧗 Via Ferrata</label>
+            <div class="count-ctrl">Max <input type="number" id="cntVF" min="0" max="8" value="2" /></div>
+          </div>
+          <div class="activity-row pg">
+            <label><input type="checkbox" id="chkPG" checked /> 🪂 Paragliding</label>
+            <div class="count-ctrl">Max <input type="number" id="cntPG" min="0" max="8" value="1" /></div>
+          </div>
+          <div class="activity-row cl">
+            <label><input type="checkbox" id="chkCL" /> 🪨 Climbing Crags</label>
+            <div class="count-ctrl">Max <input type="number" id="cntCL" min="0" max="8" value="1" /></div>
+          </div>
+          <div class="activity-row cy">
+            <label><input type="checkbox" id="chkCY" /> 💦 Canyoning / Falls</label>
+            <div class="count-ctrl">Max <input type="number" id="cntCY" min="0" max="8" value="1" /></div>
+          </div>
+          <div class="activity-row pk">
+            <label><input type="checkbox" id="chkPK" checked /> 🏔️ Passes &amp; Peaks</label>
+            <div class="count-ctrl">Max <input type="number" id="cntPK" min="0" max="8" value="1" /></div>
+          </div>
+          <div class="activity-row sw">
+            <label><input type="checkbox" id="chkSW" /> ♨️ Wild Swim / Springs</label>
+            <div class="count-ctrl">Max <input type="number" id="cntSW" min="0" max="8" value="1" /></div>
+          </div>
+        </div>
+
+        <div class="diff-grid">
+          <div>
+            <label class="field-label" for="minDiff">Min Difficulty</label>
+            <select id="minDiff">
+              <option value="1">Easy (K1–K2 / Fr 4–5 / 5.7)</option>
+              <option value="2">Moderate (K3–K4 / Fr 6 / 5.10)</option>
+              <option value="3">Hard (K5–K6 / Fr 7a+ / 5.12+)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="maxDiff">Max Difficulty</label>
+            <select id="maxDiff">
+              <option value="1">Easy (K1–K2 / Fr 4–5 / 5.7)</option>
+              <option value="2">Moderate (K3–K4 / Fr 6 / 5.10)</option>
+              <option value="3" selected>Hard (K5–K6 / Fr 7a+ / 5.12+)</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="checkbox-inline">
+          <input type="checkbox" id="includeUnrated" checked />
+          Include spots without OSM difficulty tags (recommended)
+        </label>
+        <label class="checkbox-inline">
+          <input type="checkbox" id="pgLaunchesOnly" checked />
+          Paragliding: prioritize/filter launches (skip landing fields)
+        </label>
+      </div>
+
+      <!-- Gear & Map Support Layers -->
+      <div class="section">
+        <div class="section-title">
+          <span>Gear Loadout</span>
+          <span id="gearWeightBadge" class="accent-hint">23.5 kg total</span>
+        </div>
+        <div class="chip-row" id="gearChips">
+          <span class="toggle-chip active" data-gear="base" data-kg="9">🎒 Bikepacking (+9kg)</span>
+          <span class="toggle-chip active" data-gear="vf" data-kg="2.5">⛓️ VF Kit (+2.5kg)</span>
+          <span class="toggle-chip" data-gear="pg" data-kg="4.5">🪂 Hike&amp;Fly (+4.5kg)</span>
+          <span class="toggle-chip" data-gear="cl" data-kg="4">🪢 Climb Rack (+4kg)</span>
+        </div>
+
+        <div class="section-title" style="margin-top:10px;">Map Overlays &amp; Support POIs</div>
+        <div class="chip-row" style="margin-bottom:5px;">
+          <span class="toggle-chip" id="waymarkedChip">🚲 Official Bike Networks (Waymarked)</span>
+        </div>
+        <div class="chip-row" id="supportChips">
+          <span class="toggle-chip" data-support="water">💧 Water</span>
+          <span class="toggle-chip" data-support="camp">⛺ Camps &amp; Huts</span>
+          <span class="toggle-chip" data-support="bike">🔧 Bike Shops</span>
+          <span class="toggle-chip" data-support="train">🚂 Rail &amp; Lifts</span>
+          <span class="toggle-chip" data-support="food">🛒 Groceries</span>
+        </div>
+      </div>
+
+      <div class="action-stack">
+        <button class="primary-btn" id="planBtn">🚀 Find Spots &amp; Optimize Bike Route</button>
+        <button class="secondary-btn" id="reoptimizeBtn" style="display:none;">⚡ Re-Optimize with Cached Spots</button>
+      </div>
+      <div id="statusBar"></div>
+
+      <!-- Discovered Spots & Daily Stages -->
+      <div class="section" id="spotsSection" style="display:none;">
+        <div class="section-title">
+          <span>Trip Spots &amp; Stages</span>
+          <span id="spotSummaryCount" class="accent-hint">0</span>
+        </div>
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="selected">On Route (<span id="tabSelCount">0</span>)</button>
+          <button class="tab-btn" data-tab="all">All Nearby (<span id="tabAllCount">0</span>)</button>
+          <button class="tab-btn" data-tab="stages">Day Stages</button>
+        </div>
+
+        <div class="spot-filter-bar" id="spotFilterBar">
+          <input type="text" id="spotSearchInput" placeholder="Search spot name..." />
+          <select id="spotCatFilter">
+            <option value="all">All Types</option>
+            <option value="vf">🧗 VF</option>
+            <option value="pg">🪂 PG</option>
+            <option value="cl">🪨 Climb</option>
+            <option value="cy">💦 Canyon</option>
+            <option value="pk">🏔️ Pass/Peak</option>
+            <option value="sw">♨️ Swim</option>
+          </select>
+          <select id="spotSortSelect">
+            <option value="quality">Best Match</option>
+            <option value="closest">Closest</option>
+            <option value="elevation">Highest</option>
+          </select>
+        </div>
+
+        <div class="spot-list" id="spotList"></div>
+        <div class="spot-list" id="stagesList" style="display:none;"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN MAP + TELEMETRY + ANALYTICS -->
+  <main id="main">
+    <button id="mobileMenuBtn">☰ Plan</button>
+
+    <div id="telemetry">
+      <div class="stat-pill">🛣️ <div><strong id="statDist">—</strong> <span class="sub" id="statDetour"></span></div></div>
+      <div class="stat-pill">⛰️ <div><strong id="statElev">—</strong> <span class="sub" id="statMaxElev"></span></div></div>
+      <div class="stat-pill">⏱️ <div><strong id="statTime">—</strong> <span class="sub" id="statStages"></span></div></div>
+      <div class="stat-pill" id="statWxPill" style="display:none;">💨 <strong id="statWxShort">—</strong></div>
+      <select id="routeColorMode" class="pill-select" title="Route coloring mode">
+        <option value="solid">🎨 Route: Solid</option>
+        <option value="gradient">⛰️ Route: Gradient %</option>
+        <option value="surface">🪨 Route: Surface</option>
+      </select>
+      <button class="action-pill secondary" id="saveTripBtn" title="Save trip locally">💾 Save</button>
+      <button class="action-pill" id="openExportModalBtn">⬇ Export / Share</button>
+      <button class="action-pill secondary" id="toggleDrawerBtn">📊 Analytics</button>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Bottom Analytics Drawer -->
+    <section id="analyticsDrawer">
+      <div class="drawer-card">
+        <div class="drawer-title">
+          <span>Elevation Profile &amp; Grade</span>
+          <span id="elevSummary" class="drawer-meta"></span>
+        </div>
+        <div id="elevWrap">
+          <canvas id="elevCanvas"></canvas>
+          <div id="elevTooltip"></div>
+        </div>
+      </div>
+
+      <div class="drawer-card">
+        <div class="drawer-title">
+          <span>Road Type, Surface &amp; Steepness</span>
+          <span id="routingSourceBadge" class="accent-hint"></span>
+        </div>
+        <div id="surfaceContent">
+          <div class="muted-body">Plan a route to analyze road types, surfaces &amp; gradients.</div>
+        </div>
+        <div class="advisor-box" id="tireAdvisor" style="display:none;"></div>
+      </div>
+
+      <div class="drawer-card">
+        <div class="drawer-title">
+          <span>Live Conditions, Forecast &amp; Safety</span>
+          <span id="wxLocationTag" class="muted-note">Open-Meteo</span>
+        </div>
+        <div id="weatherContent">
+          <div class="muted-body">Live wind, summit temp, 3-day outlook &amp; load analysis will appear here.</div>
+        </div>
+        <div id="emergencyBox" class="emergency-box" style="display:none;"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- GEAR CHECKLIST MODAL -->
+  <div id="gearModal" class="modal-backdrop" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>🎒 Dynamic Bikepacking Gear Checklist</h3>
+        <div class="modal-header-right">
+          <span id="gearModalWeight" class="badge"></span>
+          <button id="closeGearModalBtn" class="icon-btn compact">✕</button>
+        </div>
+      </div>
+      <div id="gearChecklistBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- SAVED TRIPS MODAL -->
+  <div id="savedModal" class="modal-backdrop" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>💾 Saved Trips</h3>
+        <div class="modal-header-right">
+          <label class="mini-btn" style="cursor:pointer;">
+            📥 Import JSON
+            <input type="file" id="importTripFile" accept=".json,application/json" style="display:none;" />
+          </label>
+          <button id="exportAllTripsBtn" class="mini-btn">📤 Backup All</button>
+          <button id="closeSavedModalBtn" class="icon-btn compact">✕</button>
+        </div>
+      </div>
+      <div id="savedTripsBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- EXPORT & SHARE MODAL -->
+  <div id="exportModal" class="modal-backdrop" role="dialog" aria-modal="true" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⬇ Export &amp; Share Adventure</h3>
+        <button id="closeExportModalBtn" class="icon-btn compact">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-btn-grid">
+          <button class="primary-btn" id="downloadGpxBtn">📍 Download GPX 1.1 (Garmin/OsmAnd/Komoot)</button>
+          <button class="secondary-btn" id="downloadGeoJsonBtn">🗺️ Download GeoJSON</button>
+          <button class="secondary-btn" id="copyShareLinkBtn">🔗 Copy Shareable URL (#trip=...)</button>
+          <button class="secondary-btn" id="copyMarkdownBtn">📋 Copy Markdown Trip Sheet</button>
+          <button class="secondary-btn" id="printTripBtn">🖨️ Print Trip Sheet</button>
+        </div>
+        <label class="field-label" for="tripMarkdownPreview" style="margin-top:10px;">Trip Sheet Preview</label>
+        <textarea id="tripMarkdownPreview" rows="10" readonly></textarea>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
